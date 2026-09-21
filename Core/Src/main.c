@@ -143,9 +143,10 @@ int main(void)
   {
 	  printf("Hello World %d", counter);
 
-	  GetVersion(0,0);
+	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_8);
 
-	  HAL_Delay(1000);
+
+	  HAL_Delay(500);
 	  counter++;
     /* USER CODE END WHILE */
 
@@ -153,6 +154,9 @@ int main(void)
   }
   /* USER CODE END 3 */
 }
+
+
+
 
 /**
   * @brief System Clock Configuration
