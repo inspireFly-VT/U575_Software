@@ -22,6 +22,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include "lr11xx_system.h"
+#include "lr1121_hal_stm32.h"
+#include "lr11xx_hal.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -140,6 +143,16 @@ int main(void)
    * DIO9(IRQ) = PB4
    */
 
+  lr11xx_ctx_t radio_context = {
+		  .spi = &hspi1,
+		  .nss_port = GPIOA, .nss_pin = GPIO_PIN_8,
+		  .reset_port = GPIOA, .reset_pin = GPIO_PIN_0,
+		  .busy_port = GPIOB, .busy_pin = GPIO_PIN_4,
+  };
+  lr11xx_system_version_t version;
+
+  printf("Setting NSS high \r\n");
+  HAL_GPIO_WritePin(radio_context.nss_port, radio_context.nss_pin, GPIO_PIN_SET);
   int counter = 0;
   while (1)
   {
@@ -147,7 +160,14 @@ int main(void)
 	  printf("Hello World %d\r\n", counter);
 	  counter++;
 
-	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_8);
+
+
+	  lr11xx_hal_reset(&radio_context);
+
+	  lr11xx_status_t status_return = lr11xx_system_get_version(&radio_context, &version);
+	  printf("Get version return: %d \r\n", status_return);
+
+	  printf("hw=0x%02X type=0x%02X fw=0x%04X\r\n \n\n", version.hw, version.type, version.fw);
 
 	  HAL_Delay(1000);
 
