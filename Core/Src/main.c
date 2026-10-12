@@ -59,8 +59,8 @@ void SystemClock_Config(void);
 static void SystemPower_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ICACHE_Init(void);
-static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -103,8 +103,8 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_ICACHE_Init();
-  MX_USART2_UART_Init();
   MX_SPI1_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -145,7 +145,7 @@ int main(void)
 
   lr11xx_ctx_t radio_context = {
 		  .spi = &hspi1,
-		  .nss_port = GPIOA, .nss_pin = GPIO_PIN_8,
+		  .nss_port = GPIOF, .nss_pin = GPIO_PIN_13,
 		  .reset_port = GPIOA, .reset_pin = GPIO_PIN_0,
 		  .busy_port = GPIOB, .busy_pin = GPIO_PIN_4,
   };
@@ -160,9 +160,10 @@ int main(void)
 	  printf("Hello World %d\r\n", counter);
 	  counter++;
 
-
-
 	  lr11xx_hal_reset(&radio_context);
+
+	  GPIO_PinState busy_state = HAL_GPIO_ReadPin(radio_context.busy_port, radio_context.busy_pin);
+	  printf("Busy status: %d \r\n", busy_state);
 
 	  lr11xx_status_t status_return = lr11xx_system_get_version(&radio_context, &version);
 	  printf("Get version return: %d \r\n", status_return);
@@ -170,6 +171,19 @@ int main(void)
 	  printf("hw=0x%02X type=0x%02X fw=0x%04X\r\n \n\n", version.hw, version.type, version.fw);
 
 	  HAL_Delay(1000);
+
+
+//	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
+//
+//	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_3);
+//
+//	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_8);
+//
+//	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_4);
+//
+//	  HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_13);
+//
+//	  HAL_Delay(500);
 
     /* USER CODE END WHILE */
 
@@ -299,7 +313,7 @@ static void MX_SPI1_Init(void)
   hspi1.Instance = SPI1;
   hspi1.Init.Mode = SPI_MODE_MASTER;
   hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_4BIT;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
@@ -398,10 +412,14 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|GPIO_PIN_8, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3|GPIO_PIN_4, GPIO_PIN_RESET);
@@ -412,6 +430,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PF13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB3 PB4 */
   GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_4;

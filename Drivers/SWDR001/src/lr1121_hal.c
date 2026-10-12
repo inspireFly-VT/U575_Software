@@ -3,6 +3,7 @@
 #include "lr1121_hal_stm32.h"
 
 #include "main.h"   // for HAL and pin defines
+#include <string.h>
 
 
 #define BUSY_TIMEOUT_MS 100
@@ -47,16 +48,19 @@ lr11xx_hal_status_t lr11xx_hal_read( const void* context, const uint8_t* command
 	HAL_GPIO_WritePin(c->nss_port, c->nss_pin, GPIO_PIN_SET);
 	if (s != HAL_OK) return LR11XX_HAL_STATUS_ERROR;
 
-	// Phase 2: wait for BUSY, then clock out a dummy byte (stat1) + data
+	// Phase 2
 	if (!wait_busy_low(c)) return LR11XX_HAL_STATUS_ERROR;
+	uint8_t tx[32] = {0};
+	uint8_t rx[32];
+	if (data_length + 1 > sizeof(tx)) return LR11XX_HAL_STATUS_ERROR;
+
 	HAL_GPIO_WritePin(c->nss_port, c->nss_pin, GPIO_PIN_RESET);
-	uint8_t dummy = 0x00;
-	s = HAL_SPI_Transmit(c->spi, &dummy, 1, 100);   // NOP; response status byte is discarded here
-	if (s == HAL_OK && data_length > 0)
-		s = HAL_SPI_Receive(c->spi, data, data_length, 100);
+	s = HAL_SPI_TransmitReceive(c->spi, tx, rx, data_length + 1, 100);
 	HAL_GPIO_WritePin(c->nss_port, c->nss_pin, GPIO_PIN_SET);
 
-	return (s == HAL_OK) ? LR11XX_HAL_STATUS_OK : LR11XX_HAL_STATUS_ERROR;
+	if (s != HAL_OK) return LR11XX_HAL_STATUS_ERROR;
+	memcpy(data, &rx[1], data_length);   // rx[0] is stat1
+	return LR11XX_HAL_STATUS_OK;
 }
 
 
