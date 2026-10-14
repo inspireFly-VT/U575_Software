@@ -6,7 +6,7 @@
 #include <string.h>
 
 
-#define BUSY_TIMEOUT_MS 100
+#define BUSY_TIMEOUT_MS 1000
 
 static bool wait_busy_low(const lr11xx_ctx_t* c) {
     uint32_t start = HAL_GetTick();

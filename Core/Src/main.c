@@ -51,7 +51,7 @@ COM_InitTypeDef BspCOMInit;
 
 SPI_HandleTypeDef hspi1;
 
-UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
 
@@ -63,7 +63,7 @@ static void SystemPower_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ICACHE_Init(void);
 static void MX_SPI1_Init(void);
-static void MX_USART2_UART_Init(void);
+static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -72,6 +72,8 @@ static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN 0 */
 
 #define CHECK(x) do { if ((x) != LR11XX_STATUS_OK) { printf("FAIL line %d\r\n", __LINE__); return -1; } } while (0)
+#define SHOW_ERR(tag) do { uint16_t e; lr11xx_system_get_errors(ctx, &e); printf(tag ": errors=0x%04X\r\n", e); } while (0)
+
 
 int radio_init(const void* ctx)
 {
@@ -79,6 +81,8 @@ int radio_init(const void* ctx)
 
     // Chip setup (in standby RC)
     CHECK(lr11xx_system_set_reg_mode(ctx, LR11XX_SYSTEM_REG_MODE_DCDC));
+    SHOW_ERR("after reg_mode");
+
 
     lr11xx_system_rfswitch_cfg_t rf_sw = {
         // VERIFY: copy from the LR1121MB1DIS shield file
@@ -92,11 +96,18 @@ int radio_init(const void* ctx)
     CHECK(lr11xx_system_set_dio_as_rf_switch(ctx, &rf_sw));
 
     // VERIFY: TCXO voltage and timeout (timeout is in 30.52 us steps)
-    CHECK(lr11xx_system_set_tcxo_mode(ctx, LR11XX_SYSTEM_TCXO_CTRL_1_8V, 164)); //Maybe optional function
+    //CHECK(lr11xx_system_set_tcxo_mode(ctx, LR11XX_SYSTEM_TCXO_CTRL_1_8V, 164)); //Maybe optional function
+    SHOW_ERR("after tcxo");
+
 
     CHECK(lr11xx_system_clear_errors(ctx));
     CHECK(lr11xx_system_calibrate(ctx, 0x3F));              // all blocks
-    CHECK(lr11xx_system_calibrate_image_in_mhz(ctx, 430, 440));
+
+    uint16_t errs;
+    lr11xx_system_get_errors(ctx, &errs);
+    printf("after calibrate: errors=0x%04X\r\n", errs);
+
+    //CHECK(lr11xx_system_calibrate_image_in_mhz(ctx, 430, 440));
     CHECK(lr11xx_system_set_dio_irq_params(ctx, LR11XX_SYSTEM_IRQ_TX_DONE, 0));
     CHECK(lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK));
 
@@ -144,16 +155,22 @@ int radio_init(const void* ctx)
 int radio_send(const void* ctx, const uint8_t* buf, uint8_t len)
 {
     CHECK(lr11xx_regmem_write_buffer8(ctx, buf, len));
-    CHECK(lr11xx_radio_set_tx(ctx, 0));          // 0 = no timeout
 
-    uint32_t start = HAL_GetTick();
-    lr11xx_system_irq_mask_t irq = 0;
-    while (HAL_GetTick() - start < 500) {
-        CHECK(lr11xx_system_get_and_clear_irq_status(ctx, &irq));
-        if (irq & LR11XX_SYSTEM_IRQ_TX_DONE) return 0;
+
+    CHECK(lr11xx_radio_set_tx(ctx, 0));
+
+    for (int ms = 0; ms < 200; ms += 10) {
+        printf("t=%d BUSY=%d DIO9=%d\r\n", ms,
+               HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_13),
+               HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_11));
+        if (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_11) == GPIO_PIN_SET) break;
+        HAL_Delay(10);
     }
-    printf("TX timeout\r\n");
-    return -1;
+
+    lr11xx_system_irq_mask_t irq = 0;
+    CHECK(lr11xx_system_get_and_clear_irq_status(ctx, &irq));
+    printf("irq=0x%08lX\r\n", (unsigned long)irq);
+    return (irq & LR11XX_SYSTEM_IRQ_TX_DONE) ? 0 : -1;
 }
 
 /* USER CODE END 0 */
@@ -192,7 +209,7 @@ int main(void)
   MX_GPIO_Init();
   MX_ICACHE_Init();
   MX_SPI1_Init();
-  MX_USART2_UART_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -226,11 +243,10 @@ int main(void)
    * MISO = PA6
    * MOSI = PA7
    * NSS(CS) = PF13
-   * Reset = PA0
+   * Reset = PA0 (or PA3?)
    * Busy = PE13
    * DIO9(IRQ) = PE11
    */
-
 
 
   // Radio Init
@@ -238,7 +254,7 @@ int main(void)
   lr11xx_ctx_t radio_context = {
 		  .spi = &hspi1,
 		  .nss_port = GPIOF, .nss_pin = GPIO_PIN_13,
-		  .reset_port = GPIOA, .reset_pin = GPIO_PIN_0,
+		  .reset_port = GPIOA, .reset_pin = GPIO_PIN_3,
 		  .busy_port = GPIOE, .busy_pin = GPIO_PIN_13,
   };
   lr11xx_system_version_t version;
@@ -248,7 +264,7 @@ int main(void)
   printf("Setting NSS high \r\n");
   HAL_GPIO_WritePin(radio_context.nss_port, radio_context.nss_pin, GPIO_PIN_SET);
 
-  static const uint8_t message[12] = "Hello World!";
+  //static const uint8_t message[12] = "Hello World!";
 
 
   /* Function to use:
@@ -326,6 +342,7 @@ int main(void)
 //
 
   if (radio_init(&radio_context) != 0) { printf("init failed\r\n"); }
+//  lr11xx_hal_reset(&radio_context);
 
   int on_off = 1;
 
@@ -335,9 +352,18 @@ int main(void)
 	  printf("Hello World %d\r\n", counter);
 	  counter++;
 
+
+	  printf("BUSY=%d\r\n", HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_13));
+	  //printf("Toggling Reset... \r\n");
+	  //HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_3);
+
+	  lr11xx_system_get_version(&radio_context, &version);
+	  printf("Version Test: hw=0x%02X type=0x%02X fw=0x%04X\r\n \n\n", version.hw, version.type, version.fw);
+
+	  HAL_Delay(500);
+
 	  // Send message
 
-//	  printf("Attempting to send message... \r\n");
 //	  for(int i = 0; i < 50; i++){
 //		  lr11xx_regmem_write_buffer8(&radio_context, message, 12);  // Load message
 //		  lr11xx_radio_set_tx(&radio_context, 0); //Set radio to transmit mode
@@ -351,26 +377,30 @@ int main(void)
 //			  }
 //		  }
 //	  }
-//	  printf("Transmitting done \r\n");
 
 
-	  for(int i = 0; i < 50; i++){
-		  radio_send(&radio_context, (const uint8_t*)"Hello World", 11);
-		  HAL_Delay(10);
-	  }
+	  printf("Attempting to send message... \r\n");
+
+	  radio_send(&radio_context, (const uint8_t*)"Hello World", 11);
+	  HAL_Delay(500);
+
+	  printf("Transmitting done \r\n");
 
 
 
 	  //Verify Radio is still working
-	  GPIO_PinState busy_state = HAL_GPIO_ReadPin(radio_context.busy_port, radio_context.busy_pin);
-	  printf("Busy status: %d \r\n", busy_state);
-
-	  lr11xx_status_t status_return = lr11xx_system_get_version(&radio_context, &version);
-	  printf("Get version return: %d \r\n", status_return);
-
-	  printf("hw=0x%02X type=0x%02X fw=0x%04X\r\n \n\n", version.hw, version.type, version.fw);
-
-	  HAL_Delay(1000);
+//	  GPIO_PinState busy_state = HAL_GPIO_ReadPin(radio_context.busy_port, radio_context.busy_pin);
+//	  printf("Busy status: %d \r\n", busy_state);
+//
+//	  lr11xx_status_t status_return = lr11xx_system_get_version(&radio_context, &version);
+//	  printf("Get version return: %d \r\n", status_return);
+//
+//	  printf("hw=0x%02X type=0x%02X fw=0x%04X\r\n \n\n", version.hw, version.type, version.fw);
+//
+//
+//	  printf("Toggling busy pin... \r\n");
+//	  HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_13);
+//	  HAL_Delay(500);
 
 
 
@@ -539,50 +569,50 @@ static void MX_SPI1_Init(void)
 }
 
 /**
-  * @brief USART2 Initialization Function
+  * @brief USART3 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_USART2_UART_Init(void)
+static void MX_USART3_UART_Init(void)
 {
 
-  /* USER CODE BEGIN USART2_Init 0 */
+  /* USER CODE BEGIN USART3_Init 0 */
 
-  /* USER CODE END USART2_Init 0 */
+  /* USER CODE END USART3_Init 0 */
 
-  /* USER CODE BEGIN USART2_Init 1 */
+  /* USER CODE BEGIN USART3_Init 1 */
 
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
+  /* USER CODE END USART3_Init 1 */
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 115200;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart3.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart3) != HAL_OK)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_SetTxFifoThreshold(&huart2, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart3, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_SetRxFifoThreshold(&huart2, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart3, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_DisableFifoMode(&huart2) != HAL_OK)
+  if (HAL_UARTEx_DisableFifoMode(&huart3) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART2_Init 2 */
+  /* USER CODE BEGIN USART3_Init 2 */
 
-  /* USER CODE END USART2_Init 2 */
+  /* USER CODE END USART3_Init 2 */
 
 }
 
@@ -603,15 +633,16 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOE_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|GPIO_PIN_8, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|GPIO_PIN_3|GPIO_PIN_8, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PA0 PA8 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_8;
+  /*Configure GPIO pins : PA0 PA3 PA8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_3|GPIO_PIN_8;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
