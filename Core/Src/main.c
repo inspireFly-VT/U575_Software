@@ -25,6 +25,9 @@
 #include "lr11xx_system.h"
 #include "lr1121_hal_stm32.h"
 #include "lr11xx_hal.h"
+
+#include "lr11xx_radio.h"
+#include "lr11xx_regmem.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -67,6 +70,91 @@ static void MX_USART2_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+#define CHECK(x) do { if ((x) != LR11XX_STATUS_OK) { printf("FAIL line %d\r\n", __LINE__); return -1; } } while (0)
+
+int radio_init(const void* ctx)
+{
+    lr11xx_hal_reset(ctx);
+
+    // Chip setup (in standby RC)
+    CHECK(lr11xx_system_set_reg_mode(ctx, LR11XX_SYSTEM_REG_MODE_DCDC));
+
+    lr11xx_system_rfswitch_cfg_t rf_sw = {
+        // VERIFY: copy from the LR1121MB1DIS shield file
+        .enable = LR11XX_SYSTEM_RFSW0_HIGH | LR11XX_SYSTEM_RFSW1_HIGH | LR11XX_SYSTEM_RFSW2_HIGH,
+		.standby = 0,
+		.rx = LR11XX_SYSTEM_RFSW0_HIGH,
+		.tx = LR11XX_SYSTEM_RFSW0_HIGH | LR11XX_SYSTEM_RFSW1_HIGH,
+		.tx_hp = LR11XX_SYSTEM_RFSW1_HIGH,
+		.tx_hf = 0,
+    };
+    CHECK(lr11xx_system_set_dio_as_rf_switch(ctx, &rf_sw));
+
+    // VERIFY: TCXO voltage and timeout (timeout is in 30.52 us steps)
+    CHECK(lr11xx_system_set_tcxo_mode(ctx, LR11XX_SYSTEM_TCXO_CTRL_1_8V, 164)); //Maybe optional function
+
+    CHECK(lr11xx_system_clear_errors(ctx));
+    CHECK(lr11xx_system_calibrate(ctx, 0x3F));              // all blocks
+    CHECK(lr11xx_system_calibrate_image_in_mhz(ctx, 430, 440));
+    CHECK(lr11xx_system_set_dio_irq_params(ctx, LR11XX_SYSTEM_IRQ_TX_DONE, 0));
+    CHECK(lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK));
+
+    // Radio config
+    CHECK(lr11xx_radio_set_pkt_type(ctx, LR11XX_RADIO_PKT_TYPE_GFSK));
+    CHECK(lr11xx_radio_set_rf_freq(ctx, 435000000));
+
+    lr11xx_radio_pa_cfg_t pa = {
+        .pa_sel = LR11XX_RADIO_PA_SEL_LP,
+        .pa_reg_supply = LR11XX_RADIO_PA_REG_SUPPLY_VREG,
+        .pa_duty_cycle = 0x04,
+        .pa_hp_sel = 0x00,
+    };
+    CHECK(lr11xx_radio_set_pa_cfg(ctx, &pa));
+    CHECK(lr11xx_radio_set_tx_params(ctx, 0, LR11XX_RADIO_RAMP_48_US));   // 0 dBm
+
+    lr11xx_radio_mod_params_gfsk_t mod = {
+        .br_in_bps = 4800,
+        .pulse_shape = LR11XX_RADIO_GFSK_PULSE_SHAPE_BT_1,
+        .bw_dsb_param = LR11XX_RADIO_GFSK_BW_19500,
+        .fdev_in_hz = 5000,
+    };
+    CHECK(lr11xx_radio_set_gfsk_mod_params(ctx, &mod));
+
+    lr11xx_radio_pkt_params_gfsk_t pkt = {
+        .preamble_len_in_bits = 32,
+        .preamble_detector = LR11XX_RADIO_GFSK_PREAMBLE_DETECTOR_MIN_8BITS,
+        .sync_word_len_in_bits = 32,
+        .address_filtering = LR11XX_RADIO_GFSK_ADDRESS_FILTERING_DISABLE,
+        .header_type = LR11XX_RADIO_GFSK_PKT_VAR_LEN,
+        .pld_len_in_bytes = 11,
+        .crc_type = LR11XX_RADIO_GFSK_CRC_2_BYTES,
+        .dc_free = LR11XX_RADIO_GFSK_DC_FREE_WHITENING,
+    };
+    CHECK(lr11xx_radio_set_gfsk_pkt_params(ctx, &pkt));
+
+    uint8_t sync[8] = { 0x12, 0xAD, 0x34, 0xCB, 0, 0, 0, 0 };
+    CHECK(lr11xx_radio_set_gfsk_sync_word(ctx, sync));
+    CHECK(lr11xx_radio_set_gfsk_crc_params(ctx, 0x1D0F, 0x1021));
+    CHECK(lr11xx_radio_set_gfsk_whitening_seed(ctx, 0x01FF));
+    CHECK(lr11xx_radio_set_rx_tx_fallback_mode(ctx, LR11XX_RADIO_FALLBACK_STDBY_RC));
+    return 0;
+}
+
+int radio_send(const void* ctx, const uint8_t* buf, uint8_t len)
+{
+    CHECK(lr11xx_regmem_write_buffer8(ctx, buf, len));
+    CHECK(lr11xx_radio_set_tx(ctx, 0));          // 0 = no timeout
+
+    uint32_t start = HAL_GetTick();
+    lr11xx_system_irq_mask_t irq = 0;
+    while (HAL_GetTick() - start < 500) {
+        CHECK(lr11xx_system_get_and_clear_irq_status(ctx, &irq));
+        if (irq & LR11XX_SYSTEM_IRQ_TX_DONE) return 0;
+    }
+    printf("TX timeout\r\n");
+    return -1;
+}
 
 /* USER CODE END 0 */
 
@@ -137,31 +225,143 @@ int main(void)
    * SCK = PA5
    * MISO = PA6
    * MOSI = PA7
-   * NSS(CS) = PA8
+   * NSS(CS) = PF13
    * Reset = PA0
-   * Busy = PB3
-   * DIO9(IRQ) = PB4
+   * Busy = PE13
+   * DIO9(IRQ) = PE11
    */
+
+
+
+  // Radio Init
 
   lr11xx_ctx_t radio_context = {
 		  .spi = &hspi1,
 		  .nss_port = GPIOF, .nss_pin = GPIO_PIN_13,
 		  .reset_port = GPIOA, .reset_pin = GPIO_PIN_0,
-		  .busy_port = GPIOB, .busy_pin = GPIO_PIN_4,
+		  .busy_port = GPIOE, .busy_pin = GPIO_PIN_13,
   };
   lr11xx_system_version_t version;
 
+
+  // Radio Set up
   printf("Setting NSS high \r\n");
   HAL_GPIO_WritePin(radio_context.nss_port, radio_context.nss_pin, GPIO_PIN_SET);
-  int counter = 0;
-  while (1)
-  {
 
+  static const uint8_t message[12] = "Hello World!";
+
+
+  /* Function to use:
+   *
+   *
+   * Set Frequency: lr11xx_radio_set_rf_freq( const void* context, const uint32_t freq_in_hz );
+   *
+   */
+//  lr11xx_hal_reset(&radio_context); //Reset radio
+//
+//  lr11xx_system_set_reg_mode(&radio_context, LR11XX_SYSTEM_REG_MODE_DCDC);
+//
+//  lr11xx_system_rfswitch_cfg_t rf_sw = {
+//          // VERIFY: copy from the LR1121MB1DIS shield file
+//      .enable = 0, .standby = 0, .rx = 0, .tx = 0, .tx_hp = 0, .tx_hf = 0,
+//  };
+//
+//  lr11xx_system_set_dio_as_rf_switch(&radio_context, &rf_sw); // Init DIO for the RX switch
+//
+//  lr11xx_system_set_tcxo_mode(&radio_context, LR11XX_SYSTEM_TCXO_CTRL_1_8V, 164); // Set power?
+//
+//  lr11xx_system_clear_errors(&radio_context);  // Clear Errors
+//
+//  lr11xx_system_calibrate(&radio_context, 0x3F); // Calibrate Radio
+//
+//  lr11xx_system_calibrate_image_in_mhz(&radio_context, 430, 440); //Calibrate for our frequency range
+//
+//  lr11xx_system_set_dio_irq_params(&radio_context, LR11XX_SYSTEM_IRQ_TX_DONE, 0); // More configuring for interrupts
+//
+//  lr11xx_system_clear_irq_status(&radio_context, LR11XX_SYSTEM_IRQ_ALL_MASK); // More IRQ stuff
+//
+//  lr11xx_radio_set_pkt_type(&radio_context, LR11XX_RADIO_PKT_TYPE_GFSK); // Set packet type to GFSK;
+//
+//  lr11xx_radio_set_rf_freq(&radio_context, 435000000);
+
+//  lr11xx_radio_pa_cfg_t pa = {
+//          .pa_sel = LR11XX_RADIO_PA_SEL_LP,
+//          .pa_reg_supply = LR11XX_RADIO_PA_REG_SUPPLY_VREG,
+//          .pa_duty_cycle = 0x04,
+//          .pa_hp_sel = 0x00,
+//      };
+//
+//
+//  lr11xx_radio_set_pa_cfg(&radio_context, &pa); // Load in packet configurations
+//
+//  lr11xx_radio_set_tx_params(&radio_context, 0, LR11XX_RADIO_RAMP_48_US); // Set transmit parameters
+//
+//  lr11xx_radio_mod_params_gfsk_t mod = {
+//          .br_in_bps = 4800,
+//          .pulse_shape = LR11XX_RADIO_GFSK_PULSE_SHAPE_BT_1,
+//          .bw_dsb_param = LR11XX_RADIO_GFSK_BW_19500,
+//          .fdev_in_hz = 5000,
+//      };
+//
+//  lr11xx_radio_set_gfsk_mod_params(&radio_context, &mod); //Load modulation parameters
+//
+//  lr11xx_radio_pkt_params_gfsk_t pkt = {
+//          .preamble_len_in_bits = 32,
+//          .preamble_detector = LR11XX_RADIO_GFSK_PREAMBLE_DETECTOR_MIN_8BITS,
+//          .sync_word_len_in_bits = 32,
+//          .address_filtering = LR11XX_RADIO_GFSK_ADDRESS_FILTERING_DISABLE,
+//          .header_type = LR11XX_RADIO_GFSK_PKT_VAR_LEN,
+//          .pld_len_in_bytes = 11,
+//          .crc_type = LR11XX_RADIO_GFSK_CRC_2_BYTES,
+//          .dc_free = LR11XX_RADIO_GFSK_DC_FREE_WHITENING,
+//      };
+//
+//  lr11xx_radio_set_gfsk_pkt_params(&radio_context, &pkt); //  Packet parameters
+//
+//  uint8_t sync[8] = { 0x12, 0xAD, 0x34, 0xCB, 0, 0, 0, 0 }; // Create sync word
+//  lr11xx_radio_set_gfsk_sync_word(&radio_context, sync); // Load sync word
+//  lr11xx_radio_set_gfsk_crc_params(&radio_context, 0x1D0F, 0x1021); // Create CRC (Cyclic redundancy check) parameters
+//  lr11xx_radio_set_gfsk_whitening_seed(&radio_context, 0x01FF); // More weird radio stuff (whitening)
+//  lr11xx_radio_set_rx_tx_fallback_mode(&radio_context, LR11XX_RADIO_FALLBACK_STDBY_RC); // Radio fallback to standby
+//
+
+  if (radio_init(&radio_context) != 0) { printf("init failed\r\n"); }
+
+  int on_off = 1;
+
+  int counter = 0;
+  while (on_off)
+  {
 	  printf("Hello World %d\r\n", counter);
 	  counter++;
 
-	  lr11xx_hal_reset(&radio_context);
+	  // Send message
 
+//	  printf("Attempting to send message... \r\n");
+//	  for(int i = 0; i < 50; i++){
+//		  lr11xx_regmem_write_buffer8(&radio_context, message, 12);  // Load message
+//		  lr11xx_radio_set_tx(&radio_context, 0); //Set radio to transmit mode
+//
+//		  uint32_t start_time = HAL_GetTick();
+//		  lr11xx_system_irq_mask_t irq = 0;
+//		  while (HAL_GetTick() - start_time < 500) {
+//			  lr11xx_system_get_and_clear_irq_status(&radio_context, &irq);
+//			  if (irq & LR11XX_SYSTEM_IRQ_TX_DONE){
+//				  break;
+//			  }
+//		  }
+//	  }
+//	  printf("Transmitting done \r\n");
+
+
+	  for(int i = 0; i < 50; i++){
+		  radio_send(&radio_context, (const uint8_t*)"Hello World", 11);
+		  HAL_Delay(10);
+	  }
+
+
+
+	  //Verify Radio is still working
 	  GPIO_PinState busy_state = HAL_GPIO_ReadPin(radio_context.busy_port, radio_context.busy_pin);
 	  printf("Busy status: %d \r\n", busy_state);
 
@@ -173,17 +373,6 @@ int main(void)
 	  HAL_Delay(1000);
 
 
-//	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_0);
-//
-//	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_3);
-//
-//	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_8);
-//
-//	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_4);
-//
-//	  HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_13);
-//
-//	  HAL_Delay(500);
 
     /* USER CODE END WHILE */
 
@@ -413,16 +602,13 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOF_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|GPIO_PIN_8, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3|GPIO_PIN_4, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PA0 PA8 */
   GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_8;
@@ -438,12 +624,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB3 PB4 */
-  GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_4;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  /*Configure GPIO pins : PE11 PE13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_11|GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
