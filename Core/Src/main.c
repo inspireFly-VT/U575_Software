@@ -291,24 +291,24 @@ int main(void)
 	  HAL_Delay(500);
 
 	  // Send message
-//	  printf("Attempting to send message... \r\n");
-//
-//	  radio_send(&radio_context, (const uint8_t*)"Hello World");
-//	  HAL_Delay(500);
-//
-//	  printf("Transmitting done \r\n");
+	  printf("Attempting to send message... \r\n");
+
+	  radio_send(&radio_context, (const uint8_t*)"Gardiner Julia Hello abcdefghijklmnopqrstuvwxyz");
+	  HAL_Delay(500);
+
+	  printf("Transmitting done \r\n");
 	  // End send message
 
-	  int n = radio_receive(&radio_context, rx, sizeof(rx) - 1, 2500);
-	  if (n > 0) {
-		  rx[n] = 0; printf("RX %d bytes: %s\r\n", n, rx);
-	  }
-	  else if (n == 0){
-		  printf("no packet\r\n");
-	  }
-	  else if (n == -2){
-		  printf("CRC/header error\r\n");
-	  }
+//	  int n = radio_receive(&radio_context, rx, sizeof(rx) - 1, 2500);
+//	  if (n > 0) {
+//		  rx[n] = 0; printf("RX %d bytes: %s\r\n", n, rx);
+//	  }
+//	  else if (n == 0){
+//		  printf("no packet\r\n");
+//	  }
+//	  else if (n == -2){
+//		  printf("CRC/header error\r\n");
+//	  }
 
 
 

@@ -46,8 +46,8 @@ lr11xx_hal_status_t lr11xx_hal_read( const void* context, const uint8_t* command
 
 	// Phase 2
 	if (!wait_busy_low(c)) return LR11XX_HAL_STATUS_ERROR;
-	uint8_t tx[32] = {0};
-	uint8_t rx[32];
+	uint8_t tx[257] = {0};
+	uint8_t rx[257];
 	if (data_length + 1 > sizeof(tx)) return LR11XX_HAL_STATUS_ERROR;
 
 	HAL_GPIO_WritePin(c->nss_port, c->nss_pin, GPIO_PIN_RESET);

@@ -55,7 +55,7 @@ int radio_init(const void* ctx) {
 		.sync_word_len_in_bits = 32,
 		.address_filtering = LR11XX_RADIO_GFSK_ADDRESS_FILTERING_DISABLE,
 		.header_type = LR11XX_RADIO_GFSK_PKT_VAR_LEN,
-		.pld_len_in_bytes = 11,
+		.pld_len_in_bytes = 255,
 		.crc_type = LR11XX_RADIO_GFSK_CRC_2_BYTES,
 		.dc_free = LR11XX_RADIO_GFSK_DC_FREE_WHITENING,
 	};
@@ -68,83 +68,6 @@ int radio_init(const void* ctx) {
 	CHECK(lr11xx_radio_set_rx_tx_fallback_mode(ctx, LR11XX_RADIO_FALLBACK_STDBY_RC));
 	return 0;
 
-}
-
-int radio_init_example(const void* ctx)
-{
-    lr11xx_hal_reset(ctx);
-
-    // Chip setup (in standby RC)
-    CHECK(lr11xx_system_set_reg_mode(ctx, LR11XX_SYSTEM_REG_MODE_DCDC));
-    SHOW_ERR("after reg_mode");
-
-
-    lr11xx_system_rfswitch_cfg_t rf_sw = {
-        // VERIFY: copy from the LR1121MB1DIS shield file
-        .enable = LR11XX_SYSTEM_RFSW0_HIGH | LR11XX_SYSTEM_RFSW1_HIGH | LR11XX_SYSTEM_RFSW2_HIGH,
-		.standby = 0,
-		.rx = LR11XX_SYSTEM_RFSW0_HIGH,
-		.tx = LR11XX_SYSTEM_RFSW0_HIGH | LR11XX_SYSTEM_RFSW1_HIGH,
-		.tx_hp = LR11XX_SYSTEM_RFSW1_HIGH,
-		.tx_hf = 0,
-    };
-    CHECK(lr11xx_system_set_dio_as_rf_switch(ctx, &rf_sw));
-
-    // VERIFY: TCXO voltage and timeout (timeout is in 30.52 us steps)
-    //CHECK(lr11xx_system_set_tcxo_mode(ctx, LR11XX_SYSTEM_TCXO_CTRL_1_8V, 164)); //Maybe optional function
-    SHOW_ERR("after tcxo");
-
-
-    CHECK(lr11xx_system_clear_errors(ctx));
-    CHECK(lr11xx_system_calibrate(ctx, 0x3F));              // all blocks
-
-    uint16_t errs;
-    lr11xx_system_get_errors(ctx, &errs);
-    printf("after calibrate: errors=0x%04X\r\n", errs);
-
-    //CHECK(lr11xx_system_calibrate_image_in_mhz(ctx, 430, 440));
-    CHECK(lr11xx_system_set_dio_irq_params(ctx, LR11XX_SYSTEM_IRQ_TX_DONE, 0));
-    CHECK(lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK));
-
-    // Radio config
-    CHECK(lr11xx_radio_set_pkt_type(ctx, LR11XX_RADIO_PKT_TYPE_GFSK));
-    CHECK(lr11xx_radio_set_rf_freq(ctx, 435000000));
-
-    lr11xx_radio_pa_cfg_t pa = {
-        .pa_sel = LR11XX_RADIO_PA_SEL_LP,
-        .pa_reg_supply = LR11XX_RADIO_PA_REG_SUPPLY_VREG,
-        .pa_duty_cycle = 0x04,
-        .pa_hp_sel = 0x00,
-    };
-    CHECK(lr11xx_radio_set_pa_cfg(ctx, &pa));
-    CHECK(lr11xx_radio_set_tx_params(ctx, 0, LR11XX_RADIO_RAMP_48_US));   // 0 dBm
-
-    lr11xx_radio_mod_params_gfsk_t mod = {
-        .br_in_bps = 4800,
-        .pulse_shape = LR11XX_RADIO_GFSK_PULSE_SHAPE_BT_1,
-        .bw_dsb_param = LR11XX_RADIO_GFSK_BW_19500,
-        .fdev_in_hz = 5000,
-    };
-    CHECK(lr11xx_radio_set_gfsk_mod_params(ctx, &mod));
-
-    lr11xx_radio_pkt_params_gfsk_t pkt = {
-        .preamble_len_in_bits = 32,
-        .preamble_detector = LR11XX_RADIO_GFSK_PREAMBLE_DETECTOR_MIN_8BITS,
-        .sync_word_len_in_bits = 32,
-        .address_filtering = LR11XX_RADIO_GFSK_ADDRESS_FILTERING_DISABLE,
-        .header_type = LR11XX_RADIO_GFSK_PKT_VAR_LEN,
-        .pld_len_in_bytes = 11,
-        .crc_type = LR11XX_RADIO_GFSK_CRC_2_BYTES,
-        .dc_free = LR11XX_RADIO_GFSK_DC_FREE_WHITENING,
-    };
-    CHECK(lr11xx_radio_set_gfsk_pkt_params(ctx, &pkt));
-
-    uint8_t sync[8] = { 0x12, 0xAD, 0x34, 0xCB, 0, 0, 0, 0 };
-    CHECK(lr11xx_radio_set_gfsk_sync_word(ctx, sync));
-    CHECK(lr11xx_radio_set_gfsk_crc_params(ctx, 0x1D0F, 0x1021));
-    CHECK(lr11xx_radio_set_gfsk_whitening_seed(ctx, 0x01FF));
-    CHECK(lr11xx_radio_set_rx_tx_fallback_mode(ctx, LR11XX_RADIO_FALLBACK_STDBY_RC));
-    return 0;
 }
 
 
