@@ -85,7 +85,9 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  // Crash (bad pointer, stack overflow, bad instruction). Without this the board
+  // just freezes and looks the same as a hang. Error_Handler lights all three LEDs.
+  Error_Handler();
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {

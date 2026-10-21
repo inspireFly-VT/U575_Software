@@ -22,12 +22,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-#include "lr11xx_system.h"
-#include "lr1121_hal_stm32.h"
-#include "lr11xx_hal.h"
-
-#include "lr11xx_radio.h"
-#include "lr11xx_regmem.h"
+#include <string.h>
+#include <stdlib.h>
+#include "radio.h"   // our LR1121 wrapper. everything radio related goes through it
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -37,7 +34,20 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+/*
+ * Which job this board does.
+ * Both boards can run the exact same build. BOARD_ROLE is only the role it
+ * starts in. Press the blue USER button at any time to swap TX <-> RX.
+ */
+#define ROLE_TX         0
+#define ROLE_RX         1
+#define BOARD_ROLE      ROLE_TX
 
+#define TX_PERIOD_MS    1000   // TX board sends one packet this often
+#define INIT_RETRY_MS   2000   // if the radio fails to start, retry this often
+#define TX_FAIL_LIMIT   3      // this many failed sends in a row -> reset and re-init the radio
+#define RX_ERR_LIMIT    3      // this many RX errors in a row -> reset and re-init the radio
+#define BUTTON_HOLD_MAX 2000   // give up waiting for the button release after this long
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,7 +64,9 @@ SPI_HandleTypeDef hspi1;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
-
+// Set by the button interrupt, cleared by the main loop. volatile because the
+// interrupt changes it behind the main loop's back.
+static volatile uint8_t button_pressed = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -70,109 +82,68 @@ static void MX_USART3_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/*
+ * Program overview
+ * ----------------
+ * Two Nucleo-U575 boards, each with an LR1121 dev board, make a one way GFSK link.
+ *  TX role  sends "PING <n>" once a second, n counting up from 0.
+ *  RX role  listens continuously and prints each packet with its RSSI, plus
+ *           running counts of good packets, CRC errors and missed sequence numbers.
+ *
+ * LEDs (so you can tell what is going on without a terminal)
+ *  green  toggles on every packet sent
+ *  blue   toggles on every good packet received
+ *  red    steady on = the last send failed or the last packet had a CRC error.
+ *         goes off again at the next good send or packet
+ *  red    blinking fast = radio not responding, retrying init
+ *  all 3  steady on = fatal MCU error (Error_Handler or a crash)
+ *
+ * Serial output goes out the ST-LINK USB port (COM1 = USART1) at 115200 8N1.
+ */
 
-#define CHECK(x) do { if ((x) != LR11XX_STATUS_OK) { printf("FAIL line %d\r\n", __LINE__); return -1; } } while (0)
-#define SHOW_ERR(tag) do { uint16_t e; lr11xx_system_get_errors(ctx, &e); printf(tag ": errors=0x%04X\r\n", e); } while (0)
+/*
+ * LR1121 dev board wiring (Michael's bench setup, verified on TX)
+ *   SCK  = PA5    MISO = PA6    MOSI = PA7   (SPI1)
+ *   NSS  = PF13   RESET = PA3
+ *   BUSY = PE13   DIO9 (IRQ) = PE11
+ * If any of these move, change them here and in the .ioc.
+ */
+static const lr11xx_ctx_t radio_ctx = {
+    .spi        = &hspi1,
+    .nss_port   = GPIOF, .nss_pin   = GPIO_PIN_13,
+    .reset_port = GPIOA, .reset_pin = GPIO_PIN_3,
+    .busy_port  = GPIOE, .busy_pin  = GPIO_PIN_13,
+    .irq_port   = GPIOE, .irq_pin   = GPIO_PIN_11,
+};
 
-
-int radio_init(const void* ctx)
+// The BSP calls this from the button's EXTI13 interrupt.
+// Keep interrupt code short. Just raise the flag and let the main loop act on it.
+void BSP_PB_Callback(Button_TypeDef Button)
 {
-    lr11xx_hal_reset(ctx);
+    if (Button == BUTTON_USER) button_pressed = 1;
+}
 
-    // Chip setup (in standby RC)
-    CHECK(lr11xx_system_set_reg_mode(ctx, LR11XX_SYSTEM_REG_MODE_DCDC));
-    SHOW_ERR("after reg_mode");
+// Put the radio in the right mode for this role and print a banner.
+// Returns 0 on success, -1 if the radio didn't respond.
+static int enter_role(int role)
+{
+    if (radio_standby(&radio_ctx) != 0) return -1;
 
-
-    lr11xx_system_rfswitch_cfg_t rf_sw = {
-        // VERIFY: copy from the LR1121MB1DIS shield file
-        .enable = LR11XX_SYSTEM_RFSW0_HIGH | LR11XX_SYSTEM_RFSW1_HIGH | LR11XX_SYSTEM_RFSW2_HIGH,
-		.standby = 0,
-		.rx = LR11XX_SYSTEM_RFSW0_HIGH,
-		.tx = LR11XX_SYSTEM_RFSW0_HIGH | LR11XX_SYSTEM_RFSW1_HIGH,
-		.tx_hp = LR11XX_SYSTEM_RFSW1_HIGH,
-		.tx_hf = 0,
-    };
-    CHECK(lr11xx_system_set_dio_as_rf_switch(ctx, &rf_sw));
-
-    // VERIFY: TCXO voltage and timeout (timeout is in 30.52 us steps)
-    //CHECK(lr11xx_system_set_tcxo_mode(ctx, LR11XX_SYSTEM_TCXO_CTRL_1_8V, 164)); //Maybe optional function
-    SHOW_ERR("after tcxo");
-
-
-    CHECK(lr11xx_system_clear_errors(ctx));
-    CHECK(lr11xx_system_calibrate(ctx, 0x3F));              // all blocks
-
-    uint16_t errs;
-    lr11xx_system_get_errors(ctx, &errs);
-    printf("after calibrate: errors=0x%04X\r\n", errs);
-
-    //CHECK(lr11xx_system_calibrate_image_in_mhz(ctx, 430, 440));
-    CHECK(lr11xx_system_set_dio_irq_params(ctx, LR11XX_SYSTEM_IRQ_TX_DONE, 0));
-    CHECK(lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK));
-
-    // Radio config
-    CHECK(lr11xx_radio_set_pkt_type(ctx, LR11XX_RADIO_PKT_TYPE_GFSK));
-    CHECK(lr11xx_radio_set_rf_freq(ctx, 435000000));
-
-    lr11xx_radio_pa_cfg_t pa = {
-        .pa_sel = LR11XX_RADIO_PA_SEL_LP,
-        .pa_reg_supply = LR11XX_RADIO_PA_REG_SUPPLY_VREG,
-        .pa_duty_cycle = 0x04,
-        .pa_hp_sel = 0x00,
-    };
-    CHECK(lr11xx_radio_set_pa_cfg(ctx, &pa));
-    CHECK(lr11xx_radio_set_tx_params(ctx, 0, LR11XX_RADIO_RAMP_48_US));   // 0 dBm
-
-    lr11xx_radio_mod_params_gfsk_t mod = {
-        .br_in_bps = 4800,
-        .pulse_shape = LR11XX_RADIO_GFSK_PULSE_SHAPE_BT_1,
-        .bw_dsb_param = LR11XX_RADIO_GFSK_BW_19500,
-        .fdev_in_hz = 5000,
-    };
-    CHECK(lr11xx_radio_set_gfsk_mod_params(ctx, &mod));
-
-    lr11xx_radio_pkt_params_gfsk_t pkt = {
-        .preamble_len_in_bits = 32,
-        .preamble_detector = LR11XX_RADIO_GFSK_PREAMBLE_DETECTOR_MIN_8BITS,
-        .sync_word_len_in_bits = 32,
-        .address_filtering = LR11XX_RADIO_GFSK_ADDRESS_FILTERING_DISABLE,
-        .header_type = LR11XX_RADIO_GFSK_PKT_VAR_LEN,
-        .pld_len_in_bytes = 11,
-        .crc_type = LR11XX_RADIO_GFSK_CRC_2_BYTES,
-        .dc_free = LR11XX_RADIO_GFSK_DC_FREE_WHITENING,
-    };
-    CHECK(lr11xx_radio_set_gfsk_pkt_params(ctx, &pkt));
-
-    uint8_t sync[8] = { 0x12, 0xAD, 0x34, 0xCB, 0, 0, 0, 0 };
-    CHECK(lr11xx_radio_set_gfsk_sync_word(ctx, sync));
-    CHECK(lr11xx_radio_set_gfsk_crc_params(ctx, 0x1D0F, 0x1021));
-    CHECK(lr11xx_radio_set_gfsk_whitening_seed(ctx, 0x01FF));
-    CHECK(lr11xx_radio_set_rx_tx_fallback_mode(ctx, LR11XX_RADIO_FALLBACK_STDBY_RC));
+    if (role == ROLE_RX) {
+        if (radio_start_rx(&radio_ctx) != 0) return -1;
+        printf("\r\n=== ROLE: RX (listening on %lu Hz) ===\r\n", (unsigned long)RADIO_FREQ_HZ);
+    } else {
+        printf("\r\n=== ROLE: TX (one packet every %d ms) ===\r\n", TX_PERIOD_MS);
+    }
     return 0;
 }
 
-int radio_send(const void* ctx, const uint8_t* buf, uint8_t len)
+// Print a payload as text. Anything that isn't a printable character shows as '.'
+// so binary junk can't mess up the terminal.
+static void print_payload(const uint8_t* buf, uint8_t len)
 {
-    CHECK(lr11xx_regmem_write_buffer8(ctx, buf, len));
-
-
-    CHECK(lr11xx_radio_set_tx(ctx, 0));
-
-    for (int ms = 0; ms < 200; ms += 10) {
-        printf("t=%d BUSY=%d DIO9=%d\r\n", ms,
-               HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_13),
-               HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_11));
-        if (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_11) == GPIO_PIN_SET) break;
-        HAL_Delay(10);
-    }
-
-    lr11xx_system_irq_mask_t irq = 0;
-    CHECK(lr11xx_system_get_and_clear_irq_status(ctx, &irq));
-    printf("irq=0x%08lX\r\n", (unsigned long)irq);
-    return (irq & LR11XX_SYSTEM_IRQ_TX_DONE) ? 0 : -1;
+    for (uint8_t i = 0; i < len; i++) putchar((buf[i] >= 32 && buf[i] < 127) ? buf[i] : '.');
 }
-
 /* USER CODE END 0 */
 
 /**
@@ -236,174 +207,137 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
+  printf("\r\nU575 + LR1121 GFSK link test\r\n");
 
-  /*
-   * Pins for LR1121 Dev Board Perspective
-   * SCK = PA5
-   * MISO = PA6
-   * MOSI = PA7
-   * NSS(CS) = PF13
-   * Reset = PA0 (or PA3?)
-   * Busy = PE13
-   * DIO9(IRQ) = PE11
-   */
+  int role = BOARD_ROLE;
+  bool radio_ok = (radio_init(&radio_ctx) == 0) && (enter_role(role) == 0);
 
+  uint8_t  buf[RADIO_MAX_PAYLOAD + 1];   // +1 so a received payload can be null terminated
+  uint32_t last_tx   = HAL_GetTick() - TX_PERIOD_MS;   // tick of the last send. starts one period back so the first PING goes right away
+  uint32_t last_init = HAL_GetTick();    // tick of the last init attempt
+  uint32_t last_blink = 0;               // for the fast red blink while the radio is down
 
-  // Radio Init
+  // TX bookkeeping
+  uint32_t tx_seq = 0;                   // sequence number for the next PING
+  uint32_t tx_fail = 0;                  // total failed sends
+  uint32_t tx_fail_streak = 0;           // failed sends in a row. too many -> re-init
 
-  lr11xx_ctx_t radio_context = {
-		  .spi = &hspi1,
-		  .nss_port = GPIOF, .nss_pin = GPIO_PIN_13,
-		  .reset_port = GPIOA, .reset_pin = GPIO_PIN_3,
-		  .busy_port = GPIOE, .busy_pin = GPIO_PIN_13,
-  };
-  lr11xx_system_version_t version;
+  // RX bookkeeping. "missed" counts gaps in the PING sequence numbers, so it is every
+  // PING that never arrived intact. a PING that failed its CRC is counted there too
+  uint32_t rx_good = 0, rx_crc = 0, rx_missed = 0, rx_last_seq = 0;
+  bool     rx_have_seq = false;          // false until the first PING arrives
+  uint32_t rx_err_streak = 0;            // RX errors in a row. too many -> re-init
 
-
-  // Radio Set up
-  printf("Setting NSS high \r\n");
-  HAL_GPIO_WritePin(radio_context.nss_port, radio_context.nss_pin, GPIO_PIN_SET);
-
-  //static const uint8_t message[12] = "Hello World!";
-
-
-  /* Function to use:
-   *
-   *
-   * Set Frequency: lr11xx_radio_set_rf_freq( const void* context, const uint32_t freq_in_hz );
-   *
-   */
-//  lr11xx_hal_reset(&radio_context); //Reset radio
-//
-//  lr11xx_system_set_reg_mode(&radio_context, LR11XX_SYSTEM_REG_MODE_DCDC);
-//
-//  lr11xx_system_rfswitch_cfg_t rf_sw = {
-//          // VERIFY: copy from the LR1121MB1DIS shield file
-//      .enable = 0, .standby = 0, .rx = 0, .tx = 0, .tx_hp = 0, .tx_hf = 0,
-//  };
-//
-//  lr11xx_system_set_dio_as_rf_switch(&radio_context, &rf_sw); // Init DIO for the RX switch
-//
-//  lr11xx_system_set_tcxo_mode(&radio_context, LR11XX_SYSTEM_TCXO_CTRL_1_8V, 164); // Set power?
-//
-//  lr11xx_system_clear_errors(&radio_context);  // Clear Errors
-//
-//  lr11xx_system_calibrate(&radio_context, 0x3F); // Calibrate Radio
-//
-//  lr11xx_system_calibrate_image_in_mhz(&radio_context, 430, 440); //Calibrate for our frequency range
-//
-//  lr11xx_system_set_dio_irq_params(&radio_context, LR11XX_SYSTEM_IRQ_TX_DONE, 0); // More configuring for interrupts
-//
-//  lr11xx_system_clear_irq_status(&radio_context, LR11XX_SYSTEM_IRQ_ALL_MASK); // More IRQ stuff
-//
-//  lr11xx_radio_set_pkt_type(&radio_context, LR11XX_RADIO_PKT_TYPE_GFSK); // Set packet type to GFSK;
-//
-//  lr11xx_radio_set_rf_freq(&radio_context, 435000000);
-
-//  lr11xx_radio_pa_cfg_t pa = {
-//          .pa_sel = LR11XX_RADIO_PA_SEL_LP,
-//          .pa_reg_supply = LR11XX_RADIO_PA_REG_SUPPLY_VREG,
-//          .pa_duty_cycle = 0x04,
-//          .pa_hp_sel = 0x00,
-//      };
-//
-//
-//  lr11xx_radio_set_pa_cfg(&radio_context, &pa); // Load in packet configurations
-//
-//  lr11xx_radio_set_tx_params(&radio_context, 0, LR11XX_RADIO_RAMP_48_US); // Set transmit parameters
-//
-//  lr11xx_radio_mod_params_gfsk_t mod = {
-//          .br_in_bps = 4800,
-//          .pulse_shape = LR11XX_RADIO_GFSK_PULSE_SHAPE_BT_1,
-//          .bw_dsb_param = LR11XX_RADIO_GFSK_BW_19500,
-//          .fdev_in_hz = 5000,
-//      };
-//
-//  lr11xx_radio_set_gfsk_mod_params(&radio_context, &mod); //Load modulation parameters
-//
-//  lr11xx_radio_pkt_params_gfsk_t pkt = {
-//          .preamble_len_in_bits = 32,
-//          .preamble_detector = LR11XX_RADIO_GFSK_PREAMBLE_DETECTOR_MIN_8BITS,
-//          .sync_word_len_in_bits = 32,
-//          .address_filtering = LR11XX_RADIO_GFSK_ADDRESS_FILTERING_DISABLE,
-//          .header_type = LR11XX_RADIO_GFSK_PKT_VAR_LEN,
-//          .pld_len_in_bytes = 11,
-//          .crc_type = LR11XX_RADIO_GFSK_CRC_2_BYTES,
-//          .dc_free = LR11XX_RADIO_GFSK_DC_FREE_WHITENING,
-//      };
-//
-//  lr11xx_radio_set_gfsk_pkt_params(&radio_context, &pkt); //  Packet parameters
-//
-//  uint8_t sync[8] = { 0x12, 0xAD, 0x34, 0xCB, 0, 0, 0, 0 }; // Create sync word
-//  lr11xx_radio_set_gfsk_sync_word(&radio_context, sync); // Load sync word
-//  lr11xx_radio_set_gfsk_crc_params(&radio_context, 0x1D0F, 0x1021); // Create CRC (Cyclic redundancy check) parameters
-//  lr11xx_radio_set_gfsk_whitening_seed(&radio_context, 0x01FF); // More weird radio stuff (whitening)
-//  lr11xx_radio_set_rx_tx_fallback_mode(&radio_context, LR11XX_RADIO_FALLBACK_STDBY_RC); // Radio fallback to standby
-//
-
-  if (radio_init(&radio_context) != 0) { printf("init failed\r\n"); }
-//  lr11xx_hal_reset(&radio_context);
-
-  int on_off = 1;
-
-  int counter = 0;
-  while (on_off)
+  while (1)
   {
-	  printf("Hello World %d\r\n", counter);
-	  counter++;
+    // ---- recovery: radio not up (bad wiring, no power, or it stopped answering) ----
+    // Fast red blink and a fresh reset + init every INIT_RETRY_MS until it comes back.
+    if (!radio_ok) {
+      if (HAL_GetTick() - last_blink >= 125) { last_blink = HAL_GetTick(); BSP_LED_Toggle(LED_RED); }
+      if (HAL_GetTick() - last_init >= INIT_RETRY_MS) {
+        last_init = HAL_GetTick();
+        printf("retrying radio init...\r\n");
+        radio_ok = (radio_init(&radio_ctx) == 0) && (enter_role(role) == 0);
+        if (radio_ok) {
+          BSP_LED_Off(LED_RED);
+          tx_fail_streak = 0;
+          rx_err_streak = 0;
+        }
+      }
+      continue;
+    }
 
+    // ---- button: swap TX <-> RX ----
+    if (button_pressed) {
+      // The interrupt fires on the press. Wait for the release, then let the
+      // contacts settle, so bounce on the release can't count as a second press.
+      uint32_t t0 = HAL_GetTick();
+      while (BSP_PB_GetState(BUTTON_USER) && (HAL_GetTick() - t0 < BUTTON_HOLD_MAX)) {}
+      HAL_Delay(50);
+      button_pressed = 0;
 
-	  printf("BUSY=%d\r\n", HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_13));
-	  //printf("Toggling Reset... \r\n");
-	  //HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_3);
+      role = (role == ROLE_TX) ? ROLE_RX : ROLE_TX;
+      tx_fail_streak = 0;
+      rx_err_streak = 0;
+      BSP_LED_Off(LED_GREEN); BSP_LED_Off(LED_BLUE); BSP_LED_Off(LED_RED);
+      if (enter_role(role) != 0) {
+        printf("radio didn't respond while switching roles\r\n");
+        radio_ok = false;
+        continue;
+      }
+    }
 
-	  lr11xx_system_get_version(&radio_context, &version);
-	  printf("Version Test: hw=0x%02X type=0x%02X fw=0x%04X\r\n \n\n", version.hw, version.type, version.fw);
+    // ---- TX role ----
+    if (role == ROLE_TX) {
+      if (HAL_GetTick() - last_tx >= TX_PERIOD_MS) {
+        last_tx = HAL_GetTick();
+        int n = snprintf((char*)buf, sizeof(buf), "PING %lu", (unsigned long)tx_seq);
 
-	  HAL_Delay(500);
+        if (radio_send(&radio_ctx, buf, (uint8_t)n) == 0) {
+          tx_fail_streak = 0;
+          BSP_LED_Toggle(LED_GREEN);
+          BSP_LED_Off(LED_RED);
+          printf("TX #%lu \"%s\"\r\n", (unsigned long)tx_seq, (char*)buf);
+        } else {
+          tx_fail++;
+          tx_fail_streak++;
+          BSP_LED_On(LED_RED);
+          printf("TX #%lu FAILED (total fails: %lu)\r\n", (unsigned long)tx_seq, (unsigned long)tx_fail);
+          if (tx_fail_streak >= TX_FAIL_LIMIT) {
+            printf("%d fails in a row, resetting the radio\r\n", TX_FAIL_LIMIT);
+            radio_ok = false;
+          }
+        }
+        tx_seq++;
+      }
+    }
 
-	  // Send message
+    // ---- RX role ----
+    else {
+      radio_rx_info_t info = { 0 };
+      // pass RADIO_MAX_PAYLOAD, not sizeof(buf), to keep the last byte free for the '\0'
+      radio_rx_result_t r = radio_poll_rx(&radio_ctx, buf, RADIO_MAX_PAYLOAD, &info);
 
-//	  for(int i = 0; i < 50; i++){
-//		  lr11xx_regmem_write_buffer8(&radio_context, message, 12);  // Load message
-//		  lr11xx_radio_set_tx(&radio_context, 0); //Set radio to transmit mode
-//
-//		  uint32_t start_time = HAL_GetTick();
-//		  lr11xx_system_irq_mask_t irq = 0;
-//		  while (HAL_GetTick() - start_time < 500) {
-//			  lr11xx_system_get_and_clear_irq_status(&radio_context, &irq);
-//			  if (irq & LR11XX_SYSTEM_IRQ_TX_DONE){
-//				  break;
-//			  }
-//		  }
-//	  }
+      if (r != RADIO_RX_ERROR && r != RADIO_RX_NONE) rx_err_streak = 0;   // the radio is answering
 
+      if (r == RADIO_RX_OK) {
+        rx_good++;
+        BSP_LED_Toggle(LED_BLUE);
+        BSP_LED_Off(LED_RED);
+        buf[info.len] = 0;
 
-	  printf("Attempting to send message... \r\n");
+        // If it's one of our PINGs, use the sequence number to spot dropped packets.
+        // If the TX board resets, its count goes back to 0. That just restarts the tracking.
+        if (info.len > 5 && memcmp(buf, "PING ", 5) == 0) {
+          uint32_t seq = strtoul((char*)buf + 5, NULL, 10);
+          if (rx_have_seq && seq > rx_last_seq + 1) rx_missed += seq - rx_last_seq - 1;
+          rx_last_seq = seq;
+          rx_have_seq = true;
+        }
 
-	  radio_send(&radio_context, (const uint8_t*)"Hello World", 11);
-	  HAL_Delay(500);
-
-	  printf("Transmitting done \r\n");
-
-
-
-	  //Verify Radio is still working
-//	  GPIO_PinState busy_state = HAL_GPIO_ReadPin(radio_context.busy_port, radio_context.busy_pin);
-//	  printf("Busy status: %d \r\n", busy_state);
-//
-//	  lr11xx_status_t status_return = lr11xx_system_get_version(&radio_context, &version);
-//	  printf("Get version return: %d \r\n", status_return);
-//
-//	  printf("hw=0x%02X type=0x%02X fw=0x%04X\r\n \n\n", version.hw, version.type, version.fw);
-//
-//
-//	  printf("Toggling busy pin... \r\n");
-//	  HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_13);
-//	  HAL_Delay(500);
-
-
-
+        printf("RX \"");
+        print_payload(buf, info.len);
+        printf("\" len=%u rssi=%d dBm | good=%lu crc_err=%lu missed=%lu\r\n",
+               info.len, info.rssi_dbm, (unsigned long)rx_good, (unsigned long)rx_crc, (unsigned long)rx_missed);
+      }
+      else if (r == RADIO_RX_CRC_ERROR) {
+        // heard something but it was corrupted. the radio is still listening
+        rx_crc++;
+        BSP_LED_On(LED_RED);
+        printf("RX CRC error rssi=%d dBm (crc_err=%lu)\r\n", info.rssi_dbm, (unsigned long)rx_crc);
+      }
+      else if (r == RADIO_RX_ERROR) {
+        // radio dropped out of RX or SPI failed. restart RX. if it keeps happening,
+        // or the restart itself fails, do a full reset + re-init (which re-checks SPI)
+        rx_err_streak++;
+        printf("RX error, restarting RX\r\n");
+        if (radio_start_rx(&radio_ctx) != 0 || rx_err_streak >= RX_ERR_LIMIT) {
+          printf("RX keeps failing, resetting the radio\r\n");
+          radio_ok = false;
+        }
+      }
+      // RADIO_RX_NONE: nothing new, loop around
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -563,7 +497,17 @@ static void MX_SPI1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN SPI1_Init 2 */
-
+  // Keep the SPI pins driven while the peripheral is disabled.
+  // HAL turns SPI off after every transfer. With this left disabled, SCK and MOSI
+  // stop being driven in the gap between two HAL calls made while NSS is still low
+  // (command then data), and a glitch on SCK could clock a stray bit into the radio.
+  // This is the "Master Keep IO State" setting in CubeMX. Set here so a code
+  // regenerate can't undo it.
+  hspi1.Init.MasterKeepIOState = SPI_MASTER_KEEP_IO_STATE_ENABLE;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE END SPI1_Init 2 */
 
 }
@@ -712,6 +656,12 @@ void Error_Handler(void)
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
+  // Solid red, green and blue together = the MCU itself hit a fatal error
+  // (clock, SPI or UART init failed, or a HardFault). The radio-only error blinks red instead.
+  // If this runs before BSP_LED_Init the pins aren't outputs yet and nothing lights up.
+  BSP_LED_On(LED_RED);
+  BSP_LED_On(LED_GREEN);
+  BSP_LED_On(LED_BLUE);
   while (1)
   {
   }
