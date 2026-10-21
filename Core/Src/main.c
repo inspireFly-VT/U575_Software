@@ -28,6 +28,8 @@
 
 #include "lr11xx_radio.h"
 #include "lr11xx_regmem.h"
+
+#include "../../Drivers/inspireFly_Drivers/Inc/lr1121_driver.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -75,7 +77,7 @@ static void MX_USART3_UART_Init(void);
 #define SHOW_ERR(tag) do { uint16_t e; lr11xx_system_get_errors(ctx, &e); printf(tag ": errors=0x%04X\r\n", e); } while (0)
 
 
-int radio_init(const void* ctx)
+int radio_init_old(const void* ctx)
 {
     lr11xx_hal_reset(ctx);
 
@@ -113,7 +115,7 @@ int radio_init(const void* ctx)
 
     // Radio config
     CHECK(lr11xx_radio_set_pkt_type(ctx, LR11XX_RADIO_PKT_TYPE_GFSK));
-    CHECK(lr11xx_radio_set_rf_freq(ctx, 435000000));
+    CHECK(lr11xx_radio_set_rf_freq(ctx, 915000000));
 
     lr11xx_radio_pa_cfg_t pa = {
         .pa_sel = LR11XX_RADIO_PA_SEL_LP,
@@ -152,7 +154,7 @@ int radio_init(const void* ctx)
     return 0;
 }
 
-int radio_send(const void* ctx, const uint8_t* buf, uint8_t len)
+int radio_send_old(const void* ctx, const uint8_t* buf, uint8_t len)
 {
     CHECK(lr11xx_regmem_write_buffer8(ctx, buf, len));
 
@@ -264,85 +266,11 @@ int main(void)
   printf("Setting NSS high \r\n");
   HAL_GPIO_WritePin(radio_context.nss_port, radio_context.nss_pin, GPIO_PIN_SET);
 
-  //static const uint8_t message[12] = "Hello World!";
-
-
-  /* Function to use:
-   *
-   *
-   * Set Frequency: lr11xx_radio_set_rf_freq( const void* context, const uint32_t freq_in_hz );
-   *
-   */
-//  lr11xx_hal_reset(&radio_context); //Reset radio
-//
-//  lr11xx_system_set_reg_mode(&radio_context, LR11XX_SYSTEM_REG_MODE_DCDC);
-//
-//  lr11xx_system_rfswitch_cfg_t rf_sw = {
-//          // VERIFY: copy from the LR1121MB1DIS shield file
-//      .enable = 0, .standby = 0, .rx = 0, .tx = 0, .tx_hp = 0, .tx_hf = 0,
-//  };
-//
-//  lr11xx_system_set_dio_as_rf_switch(&radio_context, &rf_sw); // Init DIO for the RX switch
-//
-//  lr11xx_system_set_tcxo_mode(&radio_context, LR11XX_SYSTEM_TCXO_CTRL_1_8V, 164); // Set power?
-//
-//  lr11xx_system_clear_errors(&radio_context);  // Clear Errors
-//
-//  lr11xx_system_calibrate(&radio_context, 0x3F); // Calibrate Radio
-//
-//  lr11xx_system_calibrate_image_in_mhz(&radio_context, 430, 440); //Calibrate for our frequency range
-//
-//  lr11xx_system_set_dio_irq_params(&radio_context, LR11XX_SYSTEM_IRQ_TX_DONE, 0); // More configuring for interrupts
-//
-//  lr11xx_system_clear_irq_status(&radio_context, LR11XX_SYSTEM_IRQ_ALL_MASK); // More IRQ stuff
-//
-//  lr11xx_radio_set_pkt_type(&radio_context, LR11XX_RADIO_PKT_TYPE_GFSK); // Set packet type to GFSK;
-//
-//  lr11xx_radio_set_rf_freq(&radio_context, 435000000);
-
-//  lr11xx_radio_pa_cfg_t pa = {
-//          .pa_sel = LR11XX_RADIO_PA_SEL_LP,
-//          .pa_reg_supply = LR11XX_RADIO_PA_REG_SUPPLY_VREG,
-//          .pa_duty_cycle = 0x04,
-//          .pa_hp_sel = 0x00,
-//      };
-//
-//
-//  lr11xx_radio_set_pa_cfg(&radio_context, &pa); // Load in packet configurations
-//
-//  lr11xx_radio_set_tx_params(&radio_context, 0, LR11XX_RADIO_RAMP_48_US); // Set transmit parameters
-//
-//  lr11xx_radio_mod_params_gfsk_t mod = {
-//          .br_in_bps = 4800,
-//          .pulse_shape = LR11XX_RADIO_GFSK_PULSE_SHAPE_BT_1,
-//          .bw_dsb_param = LR11XX_RADIO_GFSK_BW_19500,
-//          .fdev_in_hz = 5000,
-//      };
-//
-//  lr11xx_radio_set_gfsk_mod_params(&radio_context, &mod); //Load modulation parameters
-//
-//  lr11xx_radio_pkt_params_gfsk_t pkt = {
-//          .preamble_len_in_bits = 32,
-//          .preamble_detector = LR11XX_RADIO_GFSK_PREAMBLE_DETECTOR_MIN_8BITS,
-//          .sync_word_len_in_bits = 32,
-//          .address_filtering = LR11XX_RADIO_GFSK_ADDRESS_FILTERING_DISABLE,
-//          .header_type = LR11XX_RADIO_GFSK_PKT_VAR_LEN,
-//          .pld_len_in_bytes = 11,
-//          .crc_type = LR11XX_RADIO_GFSK_CRC_2_BYTES,
-//          .dc_free = LR11XX_RADIO_GFSK_DC_FREE_WHITENING,
-//      };
-//
-//  lr11xx_radio_set_gfsk_pkt_params(&radio_context, &pkt); //  Packet parameters
-//
-//  uint8_t sync[8] = { 0x12, 0xAD, 0x34, 0xCB, 0, 0, 0, 0 }; // Create sync word
-//  lr11xx_radio_set_gfsk_sync_word(&radio_context, sync); // Load sync word
-//  lr11xx_radio_set_gfsk_crc_params(&radio_context, 0x1D0F, 0x1021); // Create CRC (Cyclic redundancy check) parameters
-//  lr11xx_radio_set_gfsk_whitening_seed(&radio_context, 0x01FF); // More weird radio stuff (whitening)
-//  lr11xx_radio_set_rx_tx_fallback_mode(&radio_context, LR11XX_RADIO_FALLBACK_STDBY_RC); // Radio fallback to standby
-//
 
   if (radio_init(&radio_context) != 0) { printf("init failed\r\n"); }
 //  lr11xx_hal_reset(&radio_context);
+  radio_init(&radio_context);
+  uint8_t rx[32];
 
   int on_off = 1;
 
@@ -363,44 +291,24 @@ int main(void)
 	  HAL_Delay(500);
 
 	  // Send message
-
-//	  for(int i = 0; i < 50; i++){
-//		  lr11xx_regmem_write_buffer8(&radio_context, message, 12);  // Load message
-//		  lr11xx_radio_set_tx(&radio_context, 0); //Set radio to transmit mode
+//	  printf("Attempting to send message... \r\n");
 //
-//		  uint32_t start_time = HAL_GetTick();
-//		  lr11xx_system_irq_mask_t irq = 0;
-//		  while (HAL_GetTick() - start_time < 500) {
-//			  lr11xx_system_get_and_clear_irq_status(&radio_context, &irq);
-//			  if (irq & LR11XX_SYSTEM_IRQ_TX_DONE){
-//				  break;
-//			  }
-//		  }
-//	  }
-
-
-	  printf("Attempting to send message... \r\n");
-
-	  radio_send(&radio_context, (const uint8_t*)"Hello World", 11);
-	  HAL_Delay(500);
-
-	  printf("Transmitting done \r\n");
-
-
-
-	  //Verify Radio is still working
-//	  GPIO_PinState busy_state = HAL_GPIO_ReadPin(radio_context.busy_port, radio_context.busy_pin);
-//	  printf("Busy status: %d \r\n", busy_state);
-//
-//	  lr11xx_status_t status_return = lr11xx_system_get_version(&radio_context, &version);
-//	  printf("Get version return: %d \r\n", status_return);
-//
-//	  printf("hw=0x%02X type=0x%02X fw=0x%04X\r\n \n\n", version.hw, version.type, version.fw);
-//
-//
-//	  printf("Toggling busy pin... \r\n");
-//	  HAL_GPIO_TogglePin(GPIOE, GPIO_PIN_13);
+//	  radio_send(&radio_context, (const uint8_t*)"Hello World");
 //	  HAL_Delay(500);
+//
+//	  printf("Transmitting done \r\n");
+	  // End send message
+
+	  int n = radio_receive(&radio_context, rx, sizeof(rx) - 1, 2500);
+	  if (n > 0) {
+		  rx[n] = 0; printf("RX %d bytes: %s\r\n", n, rx);
+	  }
+	  else if (n == 0){
+		  printf("no packet\r\n");
+	  }
+	  else if (n == -2){
+		  printf("CRC/header error\r\n");
+	  }
 
 
 
