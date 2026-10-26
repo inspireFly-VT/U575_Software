@@ -12,8 +12,8 @@ enum Band {
 
 static enum Band current_band = UHF;
 
-static uint16_t uhf_frequency = 915000000UL;  // Default value
-static uint16_t sband_frequency = 2400000000UL; // Default value
+static uint32_t uhf_frequency = 915000000UL;  // Default value
+static uint32_t sband_frequency = 2400000000UL; // Default value
 
 static lr11xx_radio_pkt_type_t g_pkt_type;
 
@@ -49,6 +49,8 @@ int radio_init(const void* ctx) {
     CHECK(lr11xx_system_set_dio_irq_params(ctx, LR11XX_SYSTEM_IRQ_TX_DONE, 0));
     CHECK(lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK)); // Prepare interrupt functionality
 	CHECK(lr11xx_radio_set_rx_tx_fallback_mode(ctx, LR11XX_RADIO_FALLBACK_STDBY_RC)); // Set fallback mode
+
+	return 0;
 
 	// End of default init
 
@@ -102,7 +104,7 @@ int radio_init(const void* ctx) {
 
 int radio_set_uhf(const void* ctx) {
     CHECK(lr11xx_system_set_standby(ctx, LR11XX_SYSTEM_STANDBY_CFG_RC));
-    CHECK(lr11xx_system_calibrate_image_in_mhz(ctx, 902, 928));   // image cal is for the sub-GHz path
+    //CHECK(lr11xx_system_calibrate_image_in_mhz(ctx, 902, 928));   // image cal is for the sub-GHz path
     CHECK(lr11xx_radio_set_rf_freq(ctx, uhf_frequency));
 
     lr11xx_radio_pa_cfg_t pa = {
@@ -131,7 +133,6 @@ int radio_set_sband(const void* ctx) {
     CHECK(lr11xx_radio_set_pa_cfg(ctx, &pa));  // Set and load power config for sband
     CHECK(lr11xx_radio_set_tx_params(ctx, -2, LR11XX_RADIO_RAMP_48_US));
 
-    current_band = S_BAND;
     return 0;
 }
 
@@ -164,6 +165,7 @@ int radio_set_gfsk(const void* ctx) {
 	CHECK(lr11xx_radio_set_gfsk_crc_params(ctx, 0x1D0F, 0x1021));
 	CHECK(lr11xx_radio_set_gfsk_whitening_seed(ctx, 0x01FF));  // Set sync word, crc, and whitening params
 	g_pkt_type = LR11XX_RADIO_PKT_TYPE_GFSK;
+
 	return 0;
 }
 
@@ -189,6 +191,7 @@ int radio_set_lora(const void* ctx) {
 	CHECK(lr11xx_radio_set_lora_pkt_params(ctx, &g_lora_pkt));
 	CHECK(lr11xx_radio_set_lora_public_network(ctx, LR11XX_RADIO_LORA_NETWORK_PRIVATE));
 	g_pkt_type = LR11XX_RADIO_PKT_TYPE_LORA;
+
 	return 0;
 }
 
@@ -212,12 +215,21 @@ int radio_send(const void* ctx, const uint8_t* buf) {
 }
 
 int set_send_packet_length(const void* ctx, uint8_t length) {
-	g_gfsk_pkt.pld_len_in_bytes = length;
-	CHECK(lr11xx_radio_set_gfsk_pkt_params(ctx, &g_gfsk_pkt));
 
-	g_lora_pkt.pld_len_in_bytes = length;
-	CHECK(lr11xx_radio_set_lora_pkt_params(ctx, &g_lora_pkt));
+	printf("Updating packet length to %d \r\n", length);
+	if(	g_pkt_type == LR11XX_RADIO_PKT_TYPE_GFSK ) {
+		g_gfsk_pkt.pld_len_in_bytes = length;
+		CHECK(lr11xx_radio_set_gfsk_pkt_params(ctx, &g_gfsk_pkt));
+	}
+	else if( g_pkt_type == LR11XX_RADIO_PKT_TYPE_LORA ) {
+		g_lora_pkt.pld_len_in_bytes = length;
+		CHECK(lr11xx_radio_set_lora_pkt_params(ctx, &g_lora_pkt));
+	}
+	else {
+		return 1;
+	}
 
+    CHECK(lr11xx_system_clear_irq_status(ctx, LR11XX_SYSTEM_IRQ_ALL_MASK));
 	return 0;
 }
 

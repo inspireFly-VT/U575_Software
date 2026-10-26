@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <string.h>
 #include "lr11xx_system.h"
 #include "lr1121_hal_stm32.h"
 #include "lr11xx_hal.h"
@@ -77,9 +78,9 @@ static void MX_USART3_UART_Init(void);
 #define SHOW_ERR(tag) do { uint16_t e; lr11xx_system_get_errors(ctx, &e); printf(tag ": errors=0x%04X\r\n", e); } while (0)
 
 
-int basic_receive(const void* radio, uint8_t* out_buffer) {
+int basic_receive(const void* radio, uint8_t* out_buffer, uint16_t max_len) {
 
-	int n = radio_receive(radio, out_buffer, sizeof(out_buffer) - 1, 2500);
+	int n = radio_receive(radio, out_buffer, max_len - 1, 2500);
 
 	if (n > 0) {
 		out_buffer[n] = 0;
@@ -195,7 +196,7 @@ int main(void)
   radio_set_gfsk(&radio_context);
 
 
-  int on_off = 0;
+  int on_off = 1;
 
   int counter = 0;
   while (on_off)
@@ -216,10 +217,23 @@ int main(void)
 	  // Send message
 	  printf("Attempting to send message... \r\n");
 
-	  radio_send(&radio_context, (const uint8_t*)"Hello World! abcdefghijklmNOPQRSTUVWXYZ 42 45 48 51 54 57 60 63 66 69 72 75 78 81 84 87 90 93 96 99 103");
+	  const uint8_t* message = (const uint8_t*)"Hello World! abcdefghijklmNOPQRSTUVWXYZ 42 45 48 51 54 57 60 63 66 69 72 75 78 81 84 87 90 93 96 99 103";
+	  set_send_packet_length(&radio_context, strlen((const char*)message));
+	  radio_send(&radio_context, message);
+
+//	  radio_send(&radio_context, (const uint8_t*)"Hello World! abcdefghijklmNOPQRSTUVWXYZ 42 45 48 51 54 57 60 63 66 69 72 75 78 81 84 87 90 93 96 99 103");
 	  HAL_Delay(500);
 
 	  printf("Transmitting done \r\n");
+
+	  // Receiving message
+//	  printf("Attempting to receive message... \r\n");
+//	  uint8_t received[256];
+//	  int result = basic_receive(&radio_context, received, sizeof(received));
+//	  if(result > 0) {
+//		  printf("Received: %s \r\n", received);
+//	  }
+
 	  // End send message
 
     /* USER CODE END WHILE */
