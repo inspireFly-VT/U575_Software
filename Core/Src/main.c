@@ -195,6 +195,9 @@ int main(void)
   radio_set_uhf(&radio_context);
   radio_set_gfsk(&radio_context);
 
+  const uint8_t* message = (const uint8_t*)"Hello World! abcdefghijklmNOPQRSTUVWXYZ 42 45 48 51 54 57 60 63 66 69 72 75 78 81 84 87 90 93 96 99 103";
+  set_send_packet_length(&radio_context, strlen((const char*)message));
+
 
   int on_off = 1;
 
@@ -205,7 +208,7 @@ int main(void)
 	  counter++;
 
 
-	  printf("BUSY=%d\r\n", HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_13));
+	  //printf("BUSY=%d\r\n", HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_13));
 	  //printf("Toggling Reset... \r\n");
 	  //HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_3);
 
@@ -215,16 +218,52 @@ int main(void)
 	  HAL_Delay(500);
 
 	  // Send message
-	  printf("Attempting to send message... \r\n");
+	  printf("Transmitting over 915MHz for 5 seconds with GFSK... \r\n");
+	  radio_set_gfsk(&radio_context);
+	  radio_set_uhf(&radio_context);
+	  for(int i = 0; i < 10; i++){
+		  int r = radio_send(&radio_context, message);
+		  printf("send=%d \r\n", r);
+	//	  radio_send(&radio_context, (const uint8_t*)"Hello World! abcdefghijklmNOPQRSTUVWXYZ 42 45 48 51 54 57 60 63 66 69 72 75 78 81 84 87 90 93 96 99 103");
+		  HAL_Delay(500);
+	  }
 
-	  const uint8_t* message = (const uint8_t*)"Hello World! abcdefghijklmNOPQRSTUVWXYZ 42 45 48 51 54 57 60 63 66 69 72 75 78 81 84 87 90 93 96 99 103";
-	  set_send_packet_length(&radio_context, strlen((const char*)message));
-	  radio_send(&radio_context, message);
 
-//	  radio_send(&radio_context, (const uint8_t*)"Hello World! abcdefghijklmNOPQRSTUVWXYZ 42 45 48 51 54 57 60 63 66 69 72 75 78 81 84 87 90 93 96 99 103");
-	  HAL_Delay(500);
+	  printf("Transmitting over 915MHz for 5 seconds with LORA... \r\n");
+	  radio_set_lora(&radio_context);
+	  for(int i = 0; i < 10; i++){
+		  int r = radio_send(&radio_context, message);
+		  printf("send=%d \r\n", r);
 
-	  printf("Transmitting done \r\n");
+	//	  radio_send(&radio_context, (const uint8_t*)"Hello World! abcdefghijklmNOPQRSTUVWXYZ 42 45 48 51 54 57 60 63 66 69 72 75 78 81 84 87 90 93 96 99 103");
+		  HAL_Delay(500);
+	  }
+
+
+
+
+	  printf("Transmitting over 2.4GHz for 5 seconds with GFSK... \r\n");
+	  radio_set_sband(&radio_context);
+	  radio_set_gfsk(&radio_context);
+	  for(int i = 0; i < 10; i++){
+		  int r = radio_send(&radio_context, message);
+		  printf("send=%d \r\n", r);
+
+	//	  radio_send(&radio_context, (const uint8_t*)"Hello World! abcdefghijklmNOPQRSTUVWXYZ 42 45 48 51 54 57 60 63 66 69 72 75 78 81 84 87 90 93 96 99 103");
+		  HAL_Delay(500);
+	  }
+
+
+	  printf("Transmitting over 2.4GHz for 5 seconds with LORA... \r\n");
+	  radio_set_sband(&radio_context);
+	  radio_set_lora(&radio_context);
+	  for(int i = 0; i < 10; i++){
+		  int r = radio_send(&radio_context, message);
+		  printf("send=%d \r\n", r);
+
+	//	  radio_send(&radio_context, (const uint8_t*)"Hello World! abcdefghijklmNOPQRSTUVWXYZ 42 45 48 51 54 57 60 63 66 69 72 75 78 81 84 87 90 93 96 99 103");
+		  HAL_Delay(500);
+	  }
 
 	  // Receiving message
 //	  printf("Attempting to receive message... \r\n");

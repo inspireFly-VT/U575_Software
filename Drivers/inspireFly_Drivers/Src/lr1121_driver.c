@@ -13,7 +13,7 @@ enum Band {
 static enum Band current_band = UHF;
 
 static uint32_t uhf_frequency = 915000000UL;  // Default value
-static uint32_t sband_frequency = 2400000000UL; // Default value
+static uint32_t sband_frequency = 2450000000UL; // Default value
 
 static lr11xx_radio_pkt_type_t g_pkt_type;
 
